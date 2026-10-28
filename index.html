@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Alarma Destino</title>
+<link rel="stylesheet" href="lib/leaflet.css"><script src="lib/leaflet.js"></script><script src="lib/protomaps-leaflet.js"></script>
+<style>
+html,body{height:100%;margin:0;font:16px system-ui,sans-serif}
+#map{position:absolute;inset:0;background:#dfe5ea}
+.leaflet-top{margin-top:calc(70px + env(safe-area-inset-top,0px))}
+.p{position:absolute;z-index:1000;left:8px;right:8px;background:#fff;color:#1b1f24;border-radius:14px;padding:10px;box-shadow:0 2px 12px #0004;box-sizing:border-box}
+#top{top:calc(8px + env(safe-area-inset-top,0px))}#bot{bottom:calc(8px + env(safe-area-inset-bottom,0px))}
+input,select,button{font:inherit;box-sizing:border-box;padding:10px;border-radius:10px;border:1px solid #ccd;width:100%}
+button{background:#d9322b;color:#fff;border:0;font-weight:600}button.s{background:#eef0f3;color:#1b1f24}
+.r{display:flex;gap:6px;margin-top:6px}.r>*{flex:1}
+#dist{font-size:22px;font-weight:700}#st{font-size:14px;color:#556}
+#res{max-height:130px;overflow:auto}#res div{padding:8px;border-top:1px solid #eee;font-size:14px}
+</style></head><body>
+<div id="map"></div>
+<div class="p" id="top"><div class="r" style="margin:0"><input id="q" placeholder="Buscar (con internet) o 24.80, -107.39"><button id="sb" style="max-width:80px">Ir</button></div><div id="res"></div></div>
+<div class="p" id="bot">
+ <div><span id="dist">Toca el mapa para elegir destino</span> <span id="st"></span></div>
+ <div class="r"><select id="tone"><option value="sirena">Sirena fuerte</option><option value="pitido">Pitido rápido</option><option value="campana">Campana</option><option value="archivo">Mi sonido…</option></select>
+ <select id="rad"><option>300</option><option selected>500</option><option>800</option><option>1000</option><option>2000</option></select></div>
+ <input type="file" id="file" accept="audio/*" style="display:none">
+ <div class="r"><button class="s" id="test">Probar</button><button class="s" id="loc">📍 Yo</button><button id="go">Activar</button></div>
+ <button id="stop" style="display:none;margin-top:6px">⏹ Detener alarma</button>
+</div>
+<div id="perm" style="position:fixed;inset:0;z-index:3000;background:#000b;display:flex;align-items:center;justify-content:center;padding:20px;box-sizing:border-box">
+ <div style="background:#fff;color:#1b1f24;border-radius:16px;padding:20px;max-width:380px;text-align:center">
+  <div style="font-size:40px">📍</div><h2 style="margin:6px 0">Necesito tu ubicación</h2>
+  <p id="pmsg" style="margin:0 0 12px;color:#556;white-space:pre-line">Permite el acceso a la ubicación para avisarte cuando llegues a tu destino.</p>
+  <button id="pbtn">Permitir ubicación</button><button class="s" id="pskip" style="margin-top:8px">Ahora no</button>
+ </div></div>
+<script>
+const $=i=>document.getElementById(i);
+const G=window.Capacitor&&Capacitor.Plugins&&Capacitor.Plugins.Geolocation;
+const map=L.map('map',{zoomControl:false,maxZoom:18}).setView([24.8091,-107.394],13);
+const online=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'});
+let base=online;
+try{if(window.protomapsL)base=protomapsL.leafletLayer({url:'culiacan.pmtiles',flavor:'light',theme:'light',maxDataZoom:15,attribution:'© OpenStreetMap · Protomaps'})}catch(e){}
+base.addTo(map);
+L.control.layers({'Mapa sin internet':base,'Mapa en línea':online},null,{position:'topright'}).addTo(map);
+let dest=null,me=null,mk=null,circ=null,meMk=null,wid=null,active=false,ringing=false,wl=null,ac=null,tmr=null,fileAudio=null,first=true;
+function hav(a,b,c,d){const R=6371000,t=x=>x*Math.PI/180,p=t(c-a),q=t(d-b),h=Math.sin(p/2)**2+Math.cos(t(a))*Math.cos(t(c))*Math.sin(q/2)**2;return 2*R*Math.asin(Math.sqrt(h))}
+function setDest(la,ln){dest=[la,ln];try{localStorage.setItem('dest',JSON.stringify(dest))}catch(e){}
+ if(mk)map.removeLayer(mk);if(circ)map.removeLayer(circ);
+ mk=L.marker(dest).addTo(map);circ=L.circle(dest,{radius:+$('rad').value,color:'#d9322b',fillOpacity:.15}).addTo(map);upd()}
+map.on('click',e=>setDest(e.latlng.lat,e.latlng.lng));
+$('rad').onchange=()=>{if(circ)circ.setRadius(+$('rad').value);upd()};
+function upd(){if(!dest)return;if(!me){$('dist').textContent='Destino fijado';return}
+ const d=hav(me[0],me[1],dest[0],dest[1]);$('dist').textContent=d>=1000?(d/1000).toFixed(2)+' km':Math.round(d)+' m';
+ if(active&&d<=+$('rad').value)ring()}
+function onPos(p){$('perm').style.display='none';me=[p.coords.latitude,p.coords.longitude];
+ if(!meMk)meMk=L.circleMarker(me,{radius:8,color:'#fff',weight:3,fillColor:'#1a73e8',fillOpacity:1}).addTo(map);else meMk.setLatLng(me);
+ if(first){first=false;map.setView(me,15)}upd()}
+function permErr(e){wid=null;$('perm').style.display='flex';
+ $('pmsg').textContent=e&&e.code===1?'El permiso está bloqueado.\nVe a Ajustes → Apps → Alarma Destino → Permisos → Ubicación → “Permitir” (precisa). Luego vuelve a abrir la app.':'No se detecta el GPS. Activa la ubicación del teléfono en alta precisión y sal a un lugar abierto.';
+ $('pbtn').textContent='Intentar de nuevo'}
+async function track(){
+ if(wid!==null)return;wid='x';$('pmsg').textContent='Esperando tu respuesta…';
+ const eb=e=>permErr(e);
+ try{
+  if(G){const r=await G.requestPermissions();if(r.location==='denied'){permErr({code:1});return}
+   wid=await G.watchPosition({enableHighAccuracy:true,timeout:20000},(p,e)=>{if(p)onPos(p);else eb(e||{})})}
+  else wid=navigator.geolocation.watchPosition(onPos,eb,{enableHighAccuracy:true,timeout:20000,maximumAge:0})
+ }catch(e){permErr({code:1})}}
+$('pbtn').onclick=track;$('pskip').onclick=()=>{$('perm').style.display='none'};
+$('loc').onclick=()=>{if(me)map.setView(me,16);else{$('perm').style.display='flex';track()}};
+$('sb').onclick=async()=>{const q=$('q').value.trim(),m=q.match(/^(-?\d+\.?\d*)\s*[, ]\s*(-?\d+\.?\d*)$/);if(!q)return;
+ if(m){map.setView([+m[1],+m[2]],16);setDest(+m[1],+m[2]);return}
+ try{const r=await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=mx&viewbox=-107.55,24.95,-107.25,24.65&q='+encodeURIComponent(q+' Culiacán'));
+ const j=await r.json();$('res').innerHTML='';if(!j.length)$('res').textContent='Sin resultados';
+ j.forEach(x=>{const d=document.createElement('div');d.textContent=x.display_name;d.onclick=()=>{map.setView([x.lat,x.lon],17);setDest(+x.lat,+x.lon);$('res').innerHTML=''};$('res').appendChild(d)})
+ }catch(e){$('res').textContent='Sin internet: usa coordenadas o toca el mapa'}};
+function ctx(){if(!ac)ac=new (window.AudioContext||window.webkitAudioContext)();if(ac.state==='suspended')ac.resume();return ac}
+function beep(f,d,t){const a=ctx(),o=a.createOscillator(),v=a.createGain();o.type=t;o.frequency.value=f;v.gain.value=1;o.connect(v).connect(a.destination);o.start();o.stop(a.currentTime+d)}
+$('tone').onchange=()=>{if($('tone').value==='archivo')$('file').click()};
+$('file').onchange=e=>{const f=e.target.files[0];if(f){fileAudio=new Audio(URL.createObjectURL(f));fileAudio.loop=true}else $('tone').value='sirena'};
+function ring(){if(ringing)return;ringing=true;const t=$('tone').value;ctx();
+ if(t==='archivo'&&fileAudio)fileAudio.play();else{let k=0;tmr=setInterval(()=>{k++;t==='sirena'?beep(k%2?900:1400,.45,'square'):t==='pitido'?beep(2000,.12,'square'):beep(660,.9,'sine');navigator.vibrate&&navigator.vibrate(300)},t==='pitido'?220:t==='campana'?1000:500)}
+ $('stop').style.display='block';$('st').textContent='🔔 ¡Llegando!'}
+function silence(){ringing=false;clearInterval(tmr);if(fileAudio){fileAudio.pause();fileAudio.currentTime=0}$('stop').style.display='none';$('st').textContent=active?'Vigilando…':''}
+$('stop').onclick=()=>{silence();if(active)$('go').click()};$('test').onclick=ring;
+$('go').onclick=async()=>{
+ if(!active){if(!dest){alert('Toca el mapa para elegir destino');return}
+  ctx();active=true;$('go').textContent='Desactivar';$('st').textContent='Vigilando…';
+  try{wl=await navigator.wakeLock.request('screen')}catch(e){}track();upd()}
+ else{active=false;$('go').textContent='Activar';try{wl&&wl.release()}catch(e){}silence()}};
+try{const s=JSON.parse(localStorage.getItem('dest'));if(s){setDest(s[0],s[1]);map.setView(s,14)}}catch(e){}
+track();
+</script></body></html>
