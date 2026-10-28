@@ -1,0 +1,46 @@
+name: Build APK
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - run: npm install
+      - run: |
+          mkdir -p www
+          cp index.html www/index.html
+      - run: |
+          mkdir -p www/lib
+          cp node_modules/leaflet/dist/leaflet.js node_modules/leaflet/dist/leaflet.css www/lib/
+          cp -r node_modules/leaflet/dist/images www/lib/
+          cp $(find node_modules/protomaps-leaflet/dist -name 'protomaps-leaflet.js' | head -1) www/lib/protomaps-leaflet.js
+      - name: Descargar mapa de Culiacán (se guarda dentro de la app)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download -R protomaps/go-pmtiles -p '*Linux_x86_64.tar.gz' -O pm.tgz
+          tar xzf pm.tgz pmtiles
+          KEY=$(curl -s https://build-metadata.protomaps.dev/builds.json | jq -r 'sort_by(.uploaded) | last | .key')
+          echo "Usando $KEY"
+          ./pmtiles extract "https://build.protomaps.com/$KEY" www/culiacan.pmtiles --bbox=-107.55,24.68,-107.25,24.95 --maxzoom=15
+          ls -lh www/culiacan.pmtiles
+      - run: npx cap add android
+      - run: npx cap sync android
+      - run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Alarma Destino v${{ github.run_number }}
+          files: android/app/build/outputs/apk/debug/app-debug.apk
